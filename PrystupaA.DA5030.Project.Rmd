@@ -1,0 +1,915 @@
+---
+title: "DA5030 Final Project Aleksandr Prystupa"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+The NBA has launched into a new era where player performances are now judged by much more than the amount of points they have scored, or the amount of rebounds they collected. Advanced metrics are attempting to find diamonds in the rough, showing how some seemingly undervalued players are contributing to their teams. Some of the most interesting of these metrics are the RAPTOR, PREDATOR and WAR metrics. It would be extremely beneficial for an NBA analyst to know if players could be predicted as All Stars via these advanced metrics as it could help analysts sign players to contracts before they become too expensive, or find value in a player who is not drawing a lot of attention. The aim of this project is to test just that and see if Machine Learning Models can predict all stars. In doing so, Models may also identify potential players of interest who seem to be overlooked, or hint that some players who are all stars are undeserving.
+
+# Required Packages
+```{r Loading Packages}
+pacman::p_load("tidyr", "dplyr", "psych", "gmodels", "smotefamily", "ggplot2", 
+               "randomForest", "rpart", "ipred", "caret", "Amelia")
+```
+
+# Loading Data
+```{r Raptor Data}
+# Data comes in test & train files, but its not clear how they are split
+# I decided its best to combine them and then do the splitting myself later
+raptor_train <- read.csv("nba_raptor_train.csv")
+raptor_test <- read.csv("nba_raptor_test.csv")
+raptor_all <- rbind(raptor_test, raptor_train)
+```
+
+# Data Preparation
+## Subsetting Players above Year 2010 & 3000 possessions
+```{r Actual Subset}
+# Data set has multiple duplicate columns and many duplicate rows
+# Taking only relevant columns 
+important.cols <- c("player_name_x", "mp_x","season_x", "poss_x", 
+                    "raptor_offense_x", "raptor_defense_x", 
+          "raptor_total_x", "war_reg_season_x", "predator_offense_x", 
+          "predator_defense_x",
+          "predator_total_x", "pace_impact_x")
+
+# Keeping important columns
+sub.raptor_all <- raptor_all[important.cols]
+
+# Subsetting above 2010 up & > 3000 possessions (Explain why I did 3000+ possessions)
+above.2010.3000 <- subset(sub.raptor_all, sub.raptor_all$season_x > 2010 & 
+                            sub.raptor_all$poss_x > 3000)
+
+# Finding Unique Rows
+above.2010.3000 <- above.2010.3000 %>%
+  distinct()
+```
+I have used data above the year 2010 because around this year was when the 3 point revolution in the NBA began. At this point players became much more efficient and as such a players advanced stats will likely do a better job reflecting how well they play than before 2010. Also, data from this data set was much more sparse in the years before 2010. Since we want to predict all stars I made a cutoff at 3000+ possessions in a season. I find that 3000+ posessions indicated that you played enough possessions in a season to potentially vote for you as an all star. I would not want someone who only played 1000 possession in the whole season, but has very good advanced stats to be potentially predicted to be an all star, because this is never the case in real life.
+
+
+## List of All Stars for every year
+```{r All Stars}
+# I have to manually add who was all stars in each specific year since 
+# that does not come with the data set
+# I found who was an all star by just going on NBA Wikipedia pages
+ALL.STAR.2011 <- c("Derrick Rose", "Dwyane Wade", "LeBron James", 
+                   "Amar'e Stoudemire", "Dwight Howard",
+                   "Ray Allen", "Chris Bosh", "Kevin Garnett", 
+                   "Al Horford", "Joe Johnson", "Paul Pierce",
+                   "Rajon Rondo", "Chris Paul", "Kobe Bryant", 
+                   "Kevin Durant", "Carmelo Anthony", "Yao Ming",
+                   "Tim Duncan", "Pau Gasol", "Manu Ginobli", 
+                   "Blake Griffin", "Kevin Love", "Dirk Nowitzki",
+                   "Russell Westbrook", "Deron Williams")
+
+ALL.STAR.2012 <- c("Chris Paul", "Kobe Bryant", "Kevin Durant", 
+                   "Blake Griffin", "Andrew Bynum", "LaMarcus Aldridge",
+                   "Marc Gasol", "Kevin Love", "Steve Nash", "Dirk Nowitzki", 
+                   "Tony Parker", "Russell Westbrook",
+                   "Derrick Rose", "Dwyane Wade", "LeBron James", "Carmelo Anthony", 
+                   "Dwight Howard", "Chris Bosh",
+                   "Luol Deng", "Roy Hibbert", "Andre Iguodala", "Joe Johnson", 
+                   "Paul Pierce", "Rajon Rondo", "Deron Williams")
+
+ALL.STAR.2013 <- c("Rajon Rondo", "Dwyane Wade", "LeBron James", 
+                   "Carmelo Anthony", "Kevin Garnett",
+                   "Chris Bosh", "Tyson Chandler", "Luol Deng", 
+                   "Paul George", "Jrue Holiday", "Kyrie Irving",
+                   "Joakim Noah", "Brook Lopez", "Chris Paul", 
+                   "Kobe Bryant", "Kevin Durant", "Blake Griffin",
+                   "Dwight Howard", "LaMarcus Aldridge", "Tim Duncan", 
+                   "James Harden", "David Lee", "Tony Parker",
+                   "Zach Randolph", "Russell Westbrook")
+
+ALL.STAR.2014 <- c("Dwyane Wade", "Kyrie Irving", "LeBron James", 
+                   "Paul George", "Carmelo Anthony",
+                   "Joakim Noah", "Roy Hibbert", "Chris Bosh", 
+                   "Paul Millsap", "John Wall", "Joe Johnson",
+                   "DeMar DeRozan", "Stephen Curry", "Kobe Bryant", 
+                   "Kevin Durant", "Blake Griffin",
+                   "Kevin Love", "Dwight Howard", "LaMarcus Aldridge", 
+                   "Dirk Nowitzki", "Chris Paul",
+                   "James Harden", "Tony Parker", "Damian Lillard", 
+                   "Anthony Davis")
+
+ALL.STAR.2015 <- c("John Wall", "Kyle Lowry", "LeBron James", 
+                   "Pau Gasol", "Carmelo Anthony",
+                   "Al Horford", "Chris Bosh", "Paul Millsap", "Jimmy Butler", 
+                   "Dwyane Wade", "Jeff Teague",
+                   "Kyrie Irving", "Kyle Korver", "Stephen Curry", "Kobe Bryant", 
+                   "Anthony Davis", "Marc Gasol",
+                   "Blake Griffin", "LaMarcus Aldridge", "Tim Duncan", "Kevin Durant", 
+                   "Klay Thompson", "Russell Westbrook",
+                   "James Harden", "Chris Paul", "DeMarcus Cousins", 
+                   "Damian Lillard", "Dirk Nowitzki")
+
+ALL.STAR.2016 <- c("Dwyane Wade", "Kyle Lowry", "LeBron James", "Paul George", 
+                   "Carmelo Anthony",
+                   "Jimmy Butler", "Chris Bosh", "John Wall", "Paul Millsap", 
+                   "DeMar DeRozan",
+                   "Andre Drummond", "Isaiah Thomas", "Pau Gasol", 
+                   "Al Horford", "Stephen Curry",
+                   "Russell Westbrook", "Kobe Bryant", "Kevin Durant", 
+                   "Kawhi Leonard", "Chris Paul",
+                   "LaMarcus Aldridge", "James Harden", "Anthony Davis", 
+                   "DeMarcus Cousins", "Klay Thompson", "Draymond Green")
+
+
+ALL.STAR.2017 <- c("Kyrie Irving", "DeMar DeRozan", "LeBron James", 
+                   "Jimmy Butler", "Giannis Antetokounmpo",
+                   "Isaiah Thomas", "John Wall", "Kevin Love", 
+                   "Carmelo Anthony", "Kyle Lowry", "Paul George",
+                   "Kemba Walker", "Paul Millsap", "Stephen Curry", 
+                   "James Harden", "Kevin Durant", 
+                   "Kawhi Leonard", "Anthony Davis", "Kemba Walker", 
+                   "Russell Westbrook", "Klay Thompson",
+                   "Draymond Green", "DeMarcus Cousins", "Marc Gasol", 
+                   "DeAndre Jordan", "Gordon Hayward")
+
+
+ALL.STAR.2018 <- c("Kyrie Irving", "DeMar DeRozan", "LeBron James", 
+                   "Giannis Antetokounmpo", "Joel Embiid",
+                   "Bradley Beal", "Goran Dragic", "Al Horford", 
+                   "Kevin Love", "Kyle Lowry", "Victor Oladipo",
+                   "Kristaps Porzingis", "John Wall", "Andre Drummond", 
+                   "Kemba Walker", "Stephen Curry", "James Harden",
+                   "Kevin Durant", "Anthony Davis", "DeMarcus Cousins", 
+                   "Russell Westbrook", "Damian Lillard", "Draymond Green",
+                   "Karl-Anthony Towns", "LaMarcus Aldridge", "Klay Thompson", 
+                   "Jimmy Butler", "Paul George")
+
+ALL.STAR.2019 <- c("Kemba Walker", "Kyrie Irving", "Kawhi Leonard", 
+                   "Giannis Antetokounmpo", "Joel Embiid",
+                   "Kyle Lowry", "Victor Oladipo", "Khris Middleton", 
+                   "Bradley Beal", "Ben Simmons", "Blake Griffin",
+                   "Nikola Vucevic", "Dwyane Wade", "D'Angelo Russell", 
+                   "Stephen Curry", "James Harden", "Kevin Durant", "Paul George",
+                   "LeBron James", "Russell Westbrook", "Damian Lillard", 
+                   "Klay Thompson", "Anthony Davis", "LaMarcus Aldridge",
+                   "Nikola Jokic", "Karl-Anthony Towns")
+
+ALL.STAR.2020 <- c("Kemba Walker", "Trae Young", "Giannis Antetokounmpo", 
+                   "Pascal Siakam", "Joel Embiid", 
+                   "Kyle Lowry", "Ben Simmons", "Jimmy Butler", 
+                   "Khris Middleton", "Bam Adebayo", "Jayson Tatum",
+                   "Domantis Sabonis", "James Harden", "Luka Doncic", 
+                   "LeBron James", "Kawhi Leonard", "Anthony Davis",
+                   "Chris Paul", "Russell Westbrook", "Damian Lillard", 
+                   "Donovan Mitchell", "Brandom Ingram",
+                   "Nikola Jokic", "Rudy Gobert", "Devin Booker")
+
+ALL.STAR.2021 <- c("Bradley Beal", "Kyrie Irving", "Giannis Antetokounmpo", 
+                   "Kevin Durant", "Joel Embiid",
+                   "Jaylen Brown", "James Harden", "Zach Lavine", 
+                   "Ben Simmons", "Julius Randle", "Domantas Sabonis",
+                   "Jayson Tatum", "Nikola Vucevic", "Stephen Curry", 
+                   "Luka Doncic", "LeBron James", "Kawhi Leonard",
+                   "Nikola Jokic", "Devin Booker", "Mike Conley", 
+                   "Damian Lillard", "Donovan Mitchell", "Chris Paul",
+                   "Anthony Davis", "Paul George", "Zion Williamson", 
+                   "Rudy Gobert")
+```
+I had to go on nba.com and find the list of all the players that were All Stars in any given year. If that player was not found in our data set they were simply not added.
+
+## Separate each year into its own data frame
+```{r Subsetted by year data}
+# Subset by year so then I can add the extra all stars column
+data.2011 <- subset(above.2010.3000, season_x == 2011)
+data.2012 <- subset(above.2010.3000, season_x == 2012)
+data.2013 <- subset(above.2010.3000, season_x == 2013)
+data.2014 <- subset(above.2010.3000, season_x == 2014)
+data.2015 <- subset(above.2010.3000, season_x == 2015)
+data.2016 <- subset(above.2010.3000, season_x == 2016)
+data.2017 <- subset(above.2010.3000, season_x == 2017)
+data.2018 <- subset(above.2010.3000, season_x == 2018)
+data.2019 <- subset(above.2010.3000, season_x == 2019)
+data.2020 <- subset(above.2010.3000, season_x == 2020)
+data.2021 <- subset(above.2010.3000, season_x == 2021)
+```
+These were separated in order to impute the ALL STARS by year.
+
+## Creating Function to add All Stars to column
+```{r Function to impute All Star}
+# Function to add All Stars to a new column
+# 1 --> All Star 0 --> Not an All Star
+add.all.star <- function(nba.df, all.star.list) {
+  length.nba.df <- rep(NA, nrow(nba.df))
+  nba.df$ALL.STAR <- ifelse(nba.df$player_name_x %in% all.star.list, 1, 0)
+  return(nba.df)
+}
+```
+
+## Adding All Stars and rejoining data frames
+```{r Add All Stars}
+# Add the all start column
+data.2011 <- add.all.star(data.2011, ALL.STAR.2011)
+data.2012 <- add.all.star(data.2012, ALL.STAR.2012)
+data.2013 <- add.all.star(data.2013, ALL.STAR.2013)
+data.2014 <- add.all.star(data.2014, ALL.STAR.2014)
+data.2015 <- add.all.star(data.2015, ALL.STAR.2015)
+data.2016 <- add.all.star(data.2016, ALL.STAR.2016)
+data.2017 <- add.all.star(data.2017, ALL.STAR.2017)
+data.2018 <- add.all.star(data.2018, ALL.STAR.2018)
+data.2019 <- add.all.star(data.2019, ALL.STAR.2019)
+data.2020 <- add.all.star(data.2020, ALL.STAR.2020)
+data.2021 <- add.all.star(data.2021, ALL.STAR.2021)
+
+# Rejoin all the years together
+all.star.data <- rbind(data.2011, data.2012, data.2013, data.2014, data.2015, 
+                       data.2016, data.2017, data.2018, data.2019, 
+                       data.2020, data.2021)
+```
+
+### View All Star Data
+```{r Head All Star Data}
+head(all.star.data)
+```
+
+## Create Fake Data to Demonstrate Imputation and Dealing with NA's
+```{r Demonstrate Imputation and Dealing with NA}
+# Fake data
+fake.all.star <- all.star.data
+
+# Indices to make NA's with
+NA.indices.1 <- seq(from = 1, to = nrow(fake.all.star), by = 10)
+NA.indices.2 <- seq(from = 3, to = nrow(fake.all.star), by = 15)
+
+# Adding NA's to poss_x & adding NA's to Raptor_total_x
+fake.all.star$poss_x[NA.indices.1] <- NA
+fake.all.star$raptor_total_x[NA.indices.2] <- NA
+```
+
+### View Missing Data with Amelia package
+```{r Amelia}
+# View Missing Values with Amelia missmap function
+Amelia::missmap(fake.all.star)
+```
+
+### Impute total possesstion by looking at total minutes played
+```{r Impute possession}
+# Find mean of minutes played
+(mean.minutes <- mean(fake.all.star$mp_x))
+
+# Find mean of possessions played (Remove NA's)
+(mean.possessions <- mean(fake.all.star$poss_x, na.rm = T))
+
+# Find ratio to use for imputation
+(ratio.poss.minutes <- mean.possessions/mean.minutes)
+
+# Impute possessions by multiplying minutes by ratio where there are NA values
+for (i in 1:nrow(fake.all.star)) {
+  if (is.na(fake.all.star$poss_x[i])) {
+    fake.all.star$poss_x[i] <- round(fake.all.star$mp_x[i] * ratio.poss.minutes, 0)
+  }
+}
+```
+
+### View Amelia again to see if values were all imputd
+```{r Amelia Again}
+# View Missing Values with Amelia missmap function
+Amelia::missmap(fake.all.star) # Now we only have raptor_total left to impute
+```
+
+### Impute Raptor Total
+```{r Impute Raptor Total}
+# Impute Raptor Total with Raptore Offense & Defense Values
+for (i in 1:nrow(fake.all.star)) {
+  if (is.na(fake.all.star$raptor_total_x[i])) {
+    fake.all.star$raptor_total_x[i] <- fake.all.star$raptor_offense_x[i] + 
+      fake.all.star$raptor_defense_x[i]
+  }
+}
+
+# View Amelia to see if there are any missing values left
+Amelia::missmap(fake.all.star) # No missing values!
+```
+This section was done to show that I know how to deal with NA values, as my data already came with no NA values. I randomly inserted NA values into both possession and raptor total columns. I then showed that I can impute possessions
+by finding the ratio between the possessions and minutes played. Then I can replace NA values with minutes played times that ratio. For raptor total I showed that I can impute the NA values simply by adding the raptor offense and raptor defense
+
+# Data Exploration
+## Checking Frequency of All Star vs Not All Star
+```{r Data Exploration}
+# View Frequency of All Star vs not all-star
+all.star.data$ALL.STAR <- as.factor(all.star.data$ALL.STAR) # make into factor
+all.stars <- all.star.data$ALL.STAR
+
+# Looking at number of all stars versus non-all stars
+table(all.stars)
+
+# Looking at proportion of all stars versus non-all stars
+prop.table(table(all.stars))
+```
+The distribution of Non-All Star to All-Star is around 85:15. This means that their is some class imbalance and it may be worth looking at using a package to deal with it. I ended up using SMOTE in 2 of my 3 models to deal with class imbalance.
+
+## View Distribution & Correlations of Predictor Variables
+```{r Get subset of variables that will be predictors}
+# Subset only predictors
+all.star.predictors <- all.star.data[-c(1, 2, 3, 4)]
+
+# Make ALL.STAR a factor
+all.star.predictors$ALL.STAR <- as.factor(all.star.predictors$ALL.STAR)
+
+# View pairs.panels
+psych::pairs.panels(all.star.predictors[-ncol(all.star.predictors)])
+```
+All of our variables seem to be normally distributed which means that we do not need to transform them. You can see that raptor_offense & predator offense have a very high correlation. Additionally, you can see that raptor_defense & predator defense have a very high correlation. Although they have an extremely high correlation, part of this project is figuring out if one of these advanced metrics has a better chance at all star prediction and therefore I am leaving both in for all the models I will do to see what kind of predictive power they have and how they compare against each other.
+
+
+### Looking for Outliers
+```{r Summary of Predictors}
+summary(all.star.predictors)
+
+# Box plot of WAR (Wins against replacement)
+boxplot(all.star.predictors$war_reg_season_x, main = "WAR Box Plot")
+
+# Box plot of Raptor Offense 
+boxplot(all.star.predictors$raptor_offense_x, main = "Raptor Offense Box Plot")
+
+# Box plot of Predator Defense
+boxplot(all.star.predictors$predator_defense_x, main = "Predator Defense Box Plot")
+```
+One thing we can immediately notice with these box plots is that there are a lot of outliers as defined by points being outside the Interquartile Range. However, in our case we must keep these outliers, specifically because it is likely that the outliers in our data set are the ones that are going to be predicted as all stars. After all, all stars in the NBA are generally outliers as to how good they are compared to the rest of the league. What these box plots do a great job of instead is illustrating a group of players that may be more likely to be predicted all stars.
+
+# Normalizing Data for SVM model
+## Normalize Function
+```{r Normalize Function}
+normalize <- function(x) {
+  return((x - min(x)) / (max(x) - min(x)))
+}
+```
+
+## Normalizing Data
+```{r Normalizing Data}
+# Normalize all columns except predictor column
+all.star.norm <- as.data.frame(lapply(all.star.predictors[-9], normalize))
+
+# Add back the predictor column 
+all.star.norm <- cbind(all.star.norm, all.star.predictors[9])
+```
+We need normalized data for the SVM model that I will run.
+
+
+# Train/Test/Validation
+```{r Train/Test/Validation Split}
+# Set seed for reproducibility
+set.seed(300)
+
+# Train/Test/Validation Splits
+splits <- c(train = 0.6, test = 0.2, validate = 0.2)
+
+# Cutting the sample based on splits
+split.label <- sample(cut(
+  seq(nrow(all.star.predictors)), 
+  nrow(all.star.predictors) * cumsum(c(0, splits)),
+  labels = names(splits)
+))
+
+# Get 3 data frames for normalized and un-normalized data
+all.stars <- split(all.star.predictors, split.label)
+normalized.all.stars <- split(all.star.norm, split.label)
+```
+
+## Get data frames for test/train/vdalidate for normalized and non-normalized data
+```{r Get data frames for test/validate }
+# Train/Test/Validation for non normalized data
+all.star.train <- all.stars$train
+all.star.test <- all.stars$test
+all.star.validate <- all.stars$validate
+
+# Train/Test/Validation for Normalized data
+all.star.norm.train <- normalized.all.stars$train
+all.star.norm.test <- normalized.all.stars$test
+all.star.norm.validate <- normalized.all.stars$validate
+```
+
+### Add back All Star Train & Test so we can use later
+```{r Add back All Star Train & Test}
+all.stars <- rbind(all.star.train, all.star.test)
+all.stars.norm <- rbind(all.star.norm.train, all.star.norm.test)
+```
+What we have now done is create a validation and normalized validation set that will not be seen by any of the models through training or testing. The Training and Testing data sets were combined again because for models where I use
+k-fold cross validation, the cross validation will be done on all of that data. For models were I do not use cross validation, the model will be trained on the train data and tested on the test data. At the very end when I do model comparison all of the models will be compared on the validationd data.
+
+## Viewing proportions to see if they are similar
+```{r Viewing proportions for similarity}
+## Proportion for non normalized data
+# Train
+prop.table(table(all.star.train$ALL.STAR))
+
+# Test
+prop.table(table(all.star.test$ALL.STAR))
+
+# Validate
+prop.table(table(all.star.validate$ALL.STAR))
+
+## Proportion for normalized data
+# Train
+prop.table(table(all.star.norm.train$ALL.STAR))
+
+# Test
+prop.table(table(all.star.norm.test$ALL.STAR))
+
+# Validate
+prop.table(table(all.star.norm.validate$ALL.STAR))
+```
+They are both similar proportions across test, train and validate. Additionally, they are identical between normalized and not normalized which means the random split went as planned.
+
+
+# Prinicipal Component Analysis
+## Get PCA values
+```{r PCA}
+# Creating a data frame without the response variable (ALL.STAR) for PCA
+pca.df <- all.star.train[-9]
+
+# Get PCA results and scale dataframe
+pca.results <- prcomp(pca.df, scale = TRUE)
+
+# Reverse the signs b/c eigenvectors point in negative direction by default
+pca.results$rotation <- -1 * pca.results$rotation
+
+# View Principal Components
+pca.results$rotation
+```
+
+## Plot Biplot
+```{r PCA Biplot}
+# Plotting biplot
+biplot(pca.results, scale = 0)
+```
+As we can see the arrows for both offense and defense and total metrics are pointing the same way, indicating that they help explain the variance in the same way. Because of this I am going to get rid of 
+the total metrics for the logistic regression model I am planning to do. This makes sense because total is just the sum of offense and defense and so does not help the model learn more from having it.
+
+## PCA Scree Plot to see how much variance is explained by first component
+```{r PCA Scree Plot}
+# Calculate total variance explained by each PC
+var.explained <- pca.results$sdev^2 / sum(pca.results$sdev^2)
+
+# Create Scree Plot
+qplot(c(1:8), var.explained) +
+        geom_line() +
+        xlab("Prinicipal Component") +
+        ylab("Explained Variance") +
+        ggtitle("NBA SCREE PLOT") +
+        ylim(0,1)
+```
+As you can see in the Scree Plot all the variance is explained by the first 4 components, with over 80% of it being explained by the first 2 components alone.
+
+# Training Models
+## Logistic Regression
+Logistic Regression is an excellent choice to use as a model because logistic regression allows me to use regression to do classification. Additionally, Logistic Regression will allow me to easily find out what parameters are helpful
+for my model by backwards p-value elimination which will help my model be accurate on the validation data set. The model will also be checked with cross validation.
+
+### Setting up Cross Validation Parameters from Caret Package
+```{r CV GLM}
+# defining training control as CV
+train_control <- trainControl(method = "cv", number = 10)
+```
+I am doing cross validation with a k = 10.
+
+### First Logistic Regression Model
+```{r Fit1 GLM}
+set.seed(125)
+
+# Duplicating all.star.predictors to be able to easily delete variables
+dummy.all.star <- all.stars
+
+# Removing total predictors as suggested by PCA Analysis
+dummy.all.star$predator_total_x <- NULL
+dummy.all.star$raptor_total_x <- NULL
+
+# Fitting log regression model 1
+fit1.glm <- train(ALL.STAR ~., data = dummy.all.star, 
+               method = "glm",
+               trControl = train_control)
+
+# Summary model 1
+summary(fit1.glm)
+```
+
+### Second Logistic Regression Model
+```{r Fit2 GLM}
+# Removing pace_impact_x because it has highest p-value
+dummy.all.star$raptor_defense_x <- NULL
+
+# Running model with new training set
+set.seed(125)
+fit.glm2 <- train(ALL.STAR ~., data = dummy.all.star, 
+               method = "glm",
+               trControl = train_control)
+
+# Summary model 2
+summary(fit.glm2)
+```
+
+### Third Logistic Regression Model
+```{r Fit3 GLM}
+# Removing pace_impact_x because it has highest p-value
+dummy.all.star$predator_defense_x <- NULL
+
+# Running model with new training set
+set.seed(125)
+fit.glm3 <- train(ALL.STAR ~., data = dummy.all.star, 
+               method = "glm",
+               trControl = train_control)
+
+# Summary model 2
+summary(fit.glm3)
+
+# Renaming statistically significant model
+glm.best.fit <- fit.glm3
+```
+All of my predictors have a p-value of under 0.15, which is what I want to set as my cutoff. Now we can test the logistic regression model.
+
+### Testing Logistic Regression Model
+```{r Testing Logistic Cross-Fold Validation}
+# Vector of Columns that were significant based off my 0.15 p-value cutoff
+significant.cols <- c("raptor_offense_x", "war_reg_season_x", "predator_offense_x", 
+                      "pace_impact_x")
+
+# Get predictions with type response giving a probability
+glm.predictions <- predict(glm.best.fit, all.star.test[ ,significant.cols], 
+                           type = "raw")
+
+# View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.test$ALL.STAR, glm.predictions,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+
+### Gather GLM Stats for Comparison against all Models
+```{r GLM stats Test Data}
+# (True positive + True negative)/Total
+(accuracy.glm <- (25 + 213)/256)
+
+# True positive / (True positive + False positive)
+(precision.glm <- 25/(25 + 8))
+
+# True positive / (True positive + False negative)
+(recall.glm <- 25/(25 + 10))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.glm <-(2 *precision.glm * recall.glm) / (precision.glm + recall.glm))
+```
+
+## Support Vector Machine
+An SVM is a great choice for a model for my data set because SVM specializes in binary classification. After testing the SVM I have found that it works best when it works with more balanced data and as you will see below I used the smotefamily package to balance data. Additionally, SVMs have a great number of parameters that can be tuned and I will be using the built in caret tune control to tune my SVM. The model will also be checked with cross validation.
+
+### Using Smote to deal with class imbalance
+```{r SVM Smote}
+# Get data frame with balanced classes
+balanced <- smotefamily::SMOTE(all.stars.norm[-9], all.stars.norm$ALL.STAR, K = 5)
+balanced <- balanced$data
+
+# Smote creates class variable, rename to ALL.STAR
+colnames(balanced )[9] <- "ALL.STAR"
+
+# Make ALL.STAR a numeric factor
+balanced$ALL.STAR <- as.factor(as.numeric(balanced$ALL.STAR))
+```
+I am using smotefamily SMOTE function to deal with class imbalance. 
+
+### View new proportions after Smote
+```{r View new proportions after Smote}
+prop.table(table(balanced$ALL.STAR))
+```
+The proportion is much closer to 50-50 now which should help use identify ALL.STAR cases better.
+
+### Finding Optimal SVM parameters with tuning and cross validation
+```{r SVM with tuning}
+# Testing various gamma & cost parameter combinations
+gamma.params <- c(0.0001, 0.001, 0.01, 0.1, 1)
+cost.params <- c(1:5)
+
+# Setting up 10 fold cross validation
+tc <- e1071::tune.control(cross = 10)
+
+# Using tune.svm function to test gamma & cost with cross validation
+set.seed(125)
+tune.svm <- e1071::tune.svm(ALL.STAR ~., data = balanced, gamma = gamma.params, 
+                            cost = cost.params, tunecontrol = tc)
+
+# View tune.svm summary
+summary(tune.svm)
+
+# View tune.svm plot
+plot(tune.svm)
+```
+The best parameters that were found by tuning are gamma = 1 and cost = 4. I can just saved the best model from the tune.svm object by using $best.model, and I perform predictions with it below.s
+
+### Running SVM classifier with optimal parameters
+```{r Running Best SVM Fit}
+# Extracting best model from tune.svm
+svm.best.fit <- tune.svm$best.model
+
+# SVM predictions
+svm.predictions <- predict(svm.best.fit, all.star.norm.test[-ncol(all.star.norm.test)], 
+                           type = "response")
+
+# View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.norm.test$ALL.STAR, svm.predictions,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+When using SMOTE the classifier does an incredible job making sure that there are no false negatives greatly increasing our recall. This however, may be a little suspect for our validation data set.
+
+### Gather SVM Stats for Comparison against all Models
+```{r NN stats}
+# (True positive + True negative)/Total
+(accuracy.svm <- (35 + 211)/256)
+
+# True positive / (True positive + False positive)
+(precision.svm <- 35/(35 + 10))
+
+# True positive / (True positive + False negative)
+(recall.svm <- 35/(35 + 0))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.svm <- (2 *precision.svm * recall.svm) / (precision.svm + recall.svm))
+```
+
+## Random Forest (Bagged Decision Trees)
+Random Forest is an ideal model for this data set because decision trees work well with binary classification. Additionally, they lend themselves very well to bagging, which was done below to make a Random Forest of decision trees from the rpart tree algorith. The ipred library was used to set a bag of 100 trees from which a Random Forest classifier was made.
+
+### Using Smote on Train Set
+```{r Train Smote}
+smote.train <- smotefamily::SMOTE(all.star.train[-9], all.star.train$ALL.STAR, 
+                                  K = 5)
+smote.train <- smote.train$data
+colnames(smote.train)[9] <- "ALL.STAR"
+smote.train$ALL.STAR <- as.factor(as.numeric(smote.train$ALL.STAR))
+```
+Here I am using smote again except I am doing it only on the training data set. This is because when I did it on the full data set (training + test) it would just predict everything 100% correct since it is a decision tree and has seen all of the predictions. This is different from before where I used the full (without only validation) set since cross validation uses that full data set.
+
+### Random Forest using Rpart & Ipred
+```{r Random Forest}
+# Setting seed for Reproducibility
+set.seed(200)
+
+# Using ipred bagging function for bagging
+# number of bags set to 100
+# control is done with rpart decision trees
+rf.bag.fit <- ipred::bagging(
+  formula = ALL.STAR ~ .,
+  data = smote.train,
+  nbagg = 100,
+  coob = TRUE,
+  control = rpart.control(minsplit = 2, cp = 0)
+)
+```
+
+### Testing Random Forest Model
+```{r Testing Random Forest Model}
+# Storing Random Forest predictions
+rf.bag.pred <- predict(rf.bag.fit, all.star.test[-ncol(all.star.test)], 
+                       type = "class")
+
+# View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.test$ALL.STAR, rf.bag.pred,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+
+### Gather Random Forest Stats for Comparison against all Models
+```{r Random Forest stats}
+# (True positive + True negative)/Total
+(accuracy.rf <- (29 + 198)/256)
+
+# True positive / (True positive + False positive)
+(precision.rf <- 29/(29 + 23))
+
+# True positive / (True positive + False negative)
+(recall.rf <- 29/(29 + 6))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.rf <-(2 *precision.rf * recall.rf) / (precision.rf + recall.rf))
+```
+
+# Ensemble Model
+My ensemble model simply finds the mode for a certain prediction and returns that. It is a functon that takes in data and the normalized version of that data that we can run on the models.
+```{r Simple Ensemble }
+ensemble <- function(data, norm_data) {
+  # Takes in a testing data set and normalized testing data set (all.star.test, all.star.norm.test)
+  
+  ### Run Model Predictions
+  # GLM
+  significant.cols <- c("raptor_offense_x", "war_reg_season_x", 
+                        "predator_offense_x", "pace_impact_x")
+  
+  glm.predictions <- predict(glm.best.fit, data[ ,significant.cols], 
+                             type = "raw")
+  
+  ## SVM
+  svm.predictions <- predict(svm.best.fit, norm_data[-ncol(norm_data)], 
+                             type = "response")
+  
+  ## Random Forest
+  rf.bag.predictions <- predict(rf.bag.fit, data[-ncol(data)], type = "class")
+  
+  ### Store All Predictions & Find mode
+  all.predictions <- cbind.data.frame(glm.predictions, svm.predictions, 
+                                      rf.bag.predictions)
+  
+  ensemble.pred <- apply(all.predictions, 1, modeest::mfv)
+
+  return(as.numeric(ensemble.pred))
+}
+```
+
+## Testing Ensemble Model
+```{r Testing Ensemble Model}
+# Getting ensemble model predictions
+ensemble.predictions <- ensemble(all.star.test, all.star.norm.test)
+
+#View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.test$ALL.STAR, ensemble.predictions,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+
+### Gather Ensemble Stats for Comparison against all Models
+```{r Ensemble stats}
+# (True positive + True negative)/Total
+(accuracy.ensemble <- (30 + 209)/256)
+
+# True positive / (True positive + False positive)
+(precision.ensemble <- 30/(30 + 12))
+
+# True positive / (True positive + False negative)
+(recall.ensemble <- 30/(30 + 5))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.ensemble <- (2 *precision.ensemble * recall.ensemble) / 
+    (precision.ensemble + recall.ensemble))
+```
+
+# Comparing All Models with Test Set
+```{r Comparing All Models Test}
+# Gathering all stats into individual vectors
+accuracy <- c(accuracy.glm, accuracy.rf, accuracy.svm, accuracy.ensemble)
+precision <- c(precision.glm, precision.rf, precision.svm, precision.ensemble)
+recall <- c(recall.glm, recall.rf, recall.svm, recall.ensemble)
+f1.score <- c(f1.glm, f1.rf, f1.svm, f1.ensemble)
+
+# Binding stats into data frame for comparison
+model.comparison.df <- rbind.data.frame(accuracy, precision, recall, f1.score)
+
+# Naming columns & rows for data frame
+colnames(model.comparison.df) <- c("GLM", "RF", "SVM", "Ensemble")
+rownames(model.comparison.df) <- c("Accuracy", "Precision", "Recall", "F1 Score")
+
+model.comparison.df
+```
+All of the models perform quite well on the test data set, particularly SVM has perfect recall causing it to have a very high F1 score. It is good to see that the F1 score for the Ensemble is high, but it will be much more important to see how the models perform on the validation data.
+
+# Model Selection with Validation set
+## Validation Logistic Regression
+```{r Validation Logistic Regression}
+significant.cols <- c("raptor_offense_x", "war_reg_season_x", 
+                      "predator_offense_x", "pace_impact_x")
+
+log.pred.val <- predict(glm.best.fit, all.star.validate[, significant.cols], 
+                        type = "raw")
+
+#View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.validate$ALL.STAR, log.pred.val,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+
+### Validation Stats GLM
+```{r GLM stats validation}
+# (True positive + True negative)/Total
+(accuracy.val.glm <- (22 + 209)/257)
+
+# True positive / (True positive + False positive)
+(precision.val.glm <- 22/(22 + 3))
+
+# True positive / (True positive + False negative)
+(recall.val.glm <- 22/(22 + 23))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.val.glm <- (2 *precision.val.glm * recall.val.glm) / 
+    (precision.val.glm + recall.val.glm))
+```
+
+## Validation SVM
+```{r Validation SVM}
+svm.pred.val <- predict(svm.best.fit, all.star.norm.validate[-ncol(all.star.norm.validate)], 
+                        type = "response")
+
+#View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.norm.validate$ALL.STAR, svm.pred.val,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+
+### Validation Stats SVM
+```{r SVM Validation Stats}
+# (True positive + True negative)/Total
+(accuracy.val.svm <- (25+ 188)/257)
+
+# True positive / (True positive + False positive)
+(precision.val.svm <- 25/(25 + 24))
+
+# True positive / (True positive + False negative)
+(recall.val.svm <- 25/(25 + 20))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.val.svm <- (2 *precision.val.svm * recall.val.svm) / 
+    (precision.val.svm + recall.val.svm))
+```
+
+## Validation Random Forest
+```{r Validation Random Forest}
+rf.pred.val <- predict(rf.bag.fit, all.star.validate[-ncol(all.star.validate)], type = "class")
+
+#View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.validate$ALL.STAR, rf.pred.val,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+
+### Validation Stats RF
+```{r RF stats Validation}
+# (True positive + True negative)/Total
+(accuracy.val.rf <- (32+ 187)/257)
+
+# True positive / (True positive + False positive)
+(precision.val.rf <- 32/(32 + 25))
+
+# True positive / (True positive + False negative)
+(recall.val.rf <- 32/(32 + 13))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.val.rf <- (2 *precision.val.rf * recall.val.rf) / 
+    (precision.val.rf + recall.val.rf))
+```
+
+## Validation Ensemble Model
+
+```{r Validation Ensemble Model}
+ensemble.val <- ensemble(all.star.validate, all.star.norm.validate)
+
+#View predictions with gmodels confusion matrix
+gmodels::CrossTable(all.star.validate$ALL.STAR, ensemble.val,
+                    prop.chisq = F, prop.c = F, prop.r = F,
+                    dnn = c("All Star", "Predicted All Star"))
+```
+
+### Validation Stats Ensemble
+```{r Ensemble stats Validation}
+# (True positive + True negative)/Total
+(accuracy.val.ens <- (26 + 197)/257)
+
+# True positive / (True positive + False positive)
+(precision.val.ens <- 26/(26 + 15))
+
+# True positive / (True positive + False negative)
+(recall.val.ens <- 26/(26 + 19))
+
+# 2 * (precision/recall) / (precision + recall)
+(f1.val.ens <- (2 *precision.val.ens * recall.val.ens) / 
+    (precision.val.ens + recall.val.ens))
+```
+
+# Comparing All Models with Validation Set
+```{r Comparing All Models Validation}
+# Gathering all stats into individual vectors
+accuracy.val <- c(accuracy.val.glm, accuracy.val.rf, accuracy.val.svm, accuracy.val.ens)
+precision.val <- c(precision.val.glm, precision.val.rf, precision.val.svm, precision.val.ens)
+recall.val <- c(recall.val.glm, recall.val.rf, recall.val.svm, recall.val.ens)
+f1.score.val <- c(f1.val.glm, f1.val.rf, f1.val.svm, f1.val.ens)
+
+# Binding stats into data frame for comparison
+validation.comparison.df <- rbind.data.frame(accuracy.val, precision.val, recall.val, f1.score.val)
+
+# Naming columns & rows for data frame
+colnames(validation.comparison.df) <- c("GLM", "RF", "SVM", "Ensemble")
+rownames(validation.comparison.df) <- c("Accuracy", "Precision", "Recall", "F1 Score")
+
+validation.comparison.df
+```
+
+
+# Conclusion
+The goal of this project was to be able to see whether NBA All Stars could be effectively predicted by advanced analytics. This is an interesting question to answer for the NBA community because there has been a great increase in how advanced analytics are viewed with respect to signing players to new contracts. Additionally, understanding what players just missed the cut, or where more deserving than actual all stars is important because it may help teams find players that are undervalued for what they are actually offering. To test this I found a data set on Kaggle that had interesting advanced player metrics. Once downloaded I then had to manually impute the all stars into the data set. I then created 3 different models for predicting All Stars, Logistic Regression, Support Vector Machine and Decision Trees with Bagging (Random Forest). Since the prediction variable was highly imbalanced (85:15), I used the Smote Library where necessary to give models training data that was much more balanced with non all stars and all stars. I left out a validation data set at the end on which none of the models had seen in any way at any point.
+
+As this is an imbalanced classification the accuracy of the model is not very important. The Logistic Regression model performed by far the best with respect to precision at 88% precision on the validation data set. The model with the best recall was the Random Forest model at around 71%. Although the Support Vector Machine seemed to perform incredibly on the test set, its performed was not matched on the validation set. Lastly, the ensemble combines all 3 and finds the mode, and you can see that the precision and recall are in between the high values shown by GLM & RF for Precision and Recall respectively.
+
+Which model an NBA analyst might chose to use is now up to them. If they were very interested in predicting All Stars and were looking to minimize the amount of False positives, the Logistic Regression model would be the way to go. This may be useful for them, if they want to test players and see if they truly definitely belong as all-stars. On the other hand, the high Recall of Random Forest can be very useful as well. This may be useful for an analyst if they are more interested in fringe all stars and want to see what false positives the model predicted in order to find a hidden gem in the rough. Otherwise, for exploratory analysis it may be best to use the ensemble as it has decent precision and recall.
+
+
+
+
+
+
+
+
+
+
+
+
+
